@@ -1,0 +1,153 @@
+library(ROSE)
+library(caret)
+
+setwd("D:/DS")
+f<-read.csv("Telco-Customer-Churn.csv")
+
+#1.Checking
+summary(f)             
+any(is.na(f))        
+sum(is.na(f))
+colSums(is.na(f))        #In which column how many NA is there
+sum(is.na(f$TotalCharges))
+
+# Remove missing values
+f <- na.omit(f)       #Discard NA values(NA less than 50%)
+colSums(is.na(f))#Display the removed NA col to be 0
+
+
+#2. Imbalanced Data
+str(f)    #Structure of data(how many variables nd observation)
+(prop.table(table(f$Churn)))  #O/P depend on only churn column hence take prop of churn column only
+barplot(prop.table(table(f$Churn)),col=rainbow(2),ylim=c(0,1),main="Churn_Prediction")
+
+
+# Recode columns
+cols_recode1 <- c(10:15)
+for(i in 1:ncol(f[,cols_recode1])) {
+  f[,cols_recode1][,i] <- as.factor(mapvalues(f[,cols_recode1][,i], from =c("No internet service"),to=c("No")))
+}
+
+f$MultipleLines <- as.factor(mapvalues(f$MultipleLines, from=c("No phone service"), to=c("No")))
+
+f$Churn <- as.factor(mapvalues(f$Churn, from=c("No", "Yes"), to=c("0","1")))
+
+f$SeniorCitizen <- as.factor(mapvalues(f$SeniorCitizen, from=c("0","1"), to=c("No", "Yes")))
+
+# Group tenure into categories
+group_tenure <- function(tenure){
+  if (tenure >= 0 & tenure <= 12){
+    return('0-12 Month')
+  }else if(tenure > 12 & tenure <= 24){
+    return('12-24 Month')
+  }else if (tenure > 24 & tenure <= 48){
+    return('24-48 Month')
+  }else if (tenure > 48 & tenure <=60){
+    return('48-60 Month')
+  }else if (tenure > 60){
+    return('> 60 Month')
+  }
+}
+
+f$tenure_group <- sapply(f$tenure, group_tenure)          
+f$tenure_group <- as.factor(f$tenure_group)
+
+# Remove unnecessary columns
+f$customerID <- NULL
+f$tenure <- NULL          
+f$TotalCharges <- NULL
+
+
+over <- ROSE::ovun.sample(Churn ~ ., data = f, method = "over")
+f <- over$data
+
+levels(f$Churn) <- make.names(levels(f$Churn))                       #convert 0 nd 1 into x0 nd x1
+# Check for class imbalance
+prop.table(table(f$Churn))       #Proportion of 0 nd 1
+barplot(prop.table(table(f$Churn)), col=rainbow(2), ylim=c(0,1), main = "Churn_Prediction")
+
+
+
+# Split into training and testing sets
+set.seed(2017)
+intrain <- createDataPartition(f$Churn, p = 0.7, list = FALSE)
+training <- f[intrain,]
+testing <- f[-intrain,]
+
+# Set up cross-validation for training
+ctrl <- trainControl(method = "cv", number = 10, classProbs = TRUE, summaryFunction = twoClassSummary)
+# Train the model 
+
+
+#1.---Logistic regression---#
+
+LogModel <- train(Churn ~ ., data = training, method = "glm", 
+                  family = "binomial", trControl = ctrl, metric = "ROC")      #receiver operating characteristic curve is a graph showing the performance of a classification model at all classification thresholds.
+# Predict on test data
+predictions <- predict(LogModel, newdata = testing, type = "raw")
+# Evaluate performance on test data
+confusionMatrix(predictions,testing$Churn)
+
+
+
+#2---Naive Bayes---#
+
+nb_model <- train(Churn ~ ., data = training, method = "naive_bayes")
+# Make predictions on testing set
+pred <- predict(nb_model, newdata = testing)
+# Evaluate model performance
+confusionMatrix(pred, testing$Churn)
+
+
+#3.---Decision Tree---#
+
+# Train the decision tree model
+tree_model <- train(Churn ~ ., data = training, method = "rpart",
+                    trControl = ctrl, tuneLength = 10)           --------
+# Print the model details
+print(tree_model)
+# Plot the decision tree
+library(rpart.plot)
+rpart.plot(tree_model$finalModel, main = "Decision Tree")
+# Make predictions on the test data
+predictions <- predict(tree_model, newdata = testing)
+# Evaluate the model performance
+confusionMatrix(predictions, testing$Churn)
+
+
+
+#4.xgboost model---#
+xgb_model <- train(
+  Churn ~ .,
+  data = training,
+  method = "xgbTree",
+  trControl = ctrl,
+  tuneGrid = expand.grid(
+    nrounds = 50,
+    max_depth = 5,
+    eta = 0.1,
+    gamma = 0,
+    colsample_bytree = 0.8,
+    min_child_weight = 1,
+    subsample = 0.8
+  ),
+  verbose = FALSE
+)
+
+print(xgb_model)
+
+predictions <- predict(xgb_model, newdata = testing)
+
+confusionMatrix(predictions, testing$Churn)
+
+
+#5.Random Forest----
+
+library(randomForest)
+set.seed(123)
+mod_rf <- train(Churn~.,training,method="rf",trControl=ctrl)
+# Make predictions on test data
+predictions <- predict(mod_rf, newdata = testing, type = "raw")
+
+# Compute accuracy of predictions
+confusionMatrix(predictions, testing$Churn)
